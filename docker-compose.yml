@@ -1,0 +1,173 @@
+services:
+  # Base de datos MySQL para Cuentas
+  mysql:
+    image: mysql:8.0
+    container_name: cooperativa-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root123
+      MYSQL_DATABASE: cooperativa_cuentas
+      MYSQL_USER: cooperativa_user
+      MYSQL_PASSWORD: cooperativa123
+      MYSQL_ROOT_HOST: '%'
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./microservicio-cuentas/mysql-init:/docker-entrypoint-initdb.d
+    networks:
+      - cooperativa-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-proot123"]
+      timeout: 20s
+      retries: 10
+      start_period: 40s
+
+  # Base de datos PostgreSQL para Socios
+  postgres:
+    image: postgres:15
+    container_name: cooperativa-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: cooperativa_socios
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - cooperativa-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Backend NestJS - Microservicio Cuentas
+  backend-cuentas:
+    build:
+      context: ./microservicio-cuentas
+      dockerfile: Dockerfile
+    container_name: backend-cuentas
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USERNAME: cooperativa_user
+      DB_PASSWORD: cooperativa123
+      DB_DATABASE: cooperativa_cuentas
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - cooperativa-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Backend Spring Boot - Microservicio Socios
+  backend-socios:
+    build:
+      context: ./socios
+      dockerfile: Dockerfile
+    container_name: backend-socios
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/cooperativa_socios
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: postgres
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - cooperativa-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Frontend React - Cuentas
+  frontend-cuentas:
+    build:
+      context: ./frontend-cuentas
+      dockerfile: Dockerfile
+    container_name: frontend-cuentas
+    restart: unless-stopped
+    ports:
+      - "4000:80"
+    environment:
+      REACT_APP_API_URL: http://localhost:3000/cuentas
+    depends_on:
+      - backend-cuentas
+    networks:
+      - cooperativa-network
+
+  # Frontend React - Socios
+  frontend-socios:
+    build:
+      context: ./frontend-socios
+      dockerfile: Dockerfile
+    container_name: frontend-socios
+    restart: unless-stopped
+    ports:
+      - "4001:80"
+    environment:
+      REACT_APP_API_URL: http://localhost:8080/api
+    depends_on:
+      - backend-socios
+    networks:
+      - cooperativa-network
+
+  # Herramientas de administración
+  mysql-admin:
+    image: phpmyadmin/phpmyadmin
+    container_name: mysql-admin
+    restart: unless-stopped
+    depends_on:
+      - mysql
+    environment:
+      PMA_HOST: mysql
+      PMA_PORT: 3306
+      PMA_ARBITRARY: 1
+      UPLOAD_LIMIT: 256M
+    ports:
+      - "8081:80"
+    networks:
+      - cooperativa-network
+
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: postgres-admin
+    restart: unless-stopped
+    depends_on:
+      - postgres
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@cooperativa.com
+      PGADMIN_DEFAULT_PASSWORD: admin123
+    ports:
+      - "8082:80"
+    networks:
+      - cooperativa-network
+
+volumes:
+  mysql_data:
+    driver: local
+  postgres_data:
+    driver: local
+
+networks:
+  cooperativa-network:
+    driver: bridge
